@@ -3,7 +3,12 @@ import cv2
 import numpy as np
 import pandas as pd
 import random
+import matplotlib.pyplot as plt
 import tensorflow as tf
+
+print("GPU available:", tf.config.list_physical_devices('GPU'))
+print("Built with CUDA:", tf.test.is_built_with_cuda())
+print("GPU devices:", tf.config.list_physical_devices('GPU'))
 
 # Disable GPU if needed
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -18,7 +23,10 @@ BATCH_SIZE  = 4
 FRAMES = 10
 IMG_SIZE = 224
 CHANNELS = 3
-
+#DEPENDS ON BATCH SIZE
+# In DAiSEE, 5358 labels and 5481 clips in training, 210552061 has a label but no video
+STEPS_PER_EPOCH = 1370
+N_EPOCHS = 10
 
 ## Loads paths all the expressions of all users
 ## Two loops: first over each user and then for each expression of a user
@@ -57,8 +65,8 @@ def data_generator(folder, label_dict):
                 else:
                     unlabeled_clips = unlabeled_clips + 1
 
-            print(f"Sizes: {np.shape(np.array(X))}, {np.shape(np.array(y))}")
-            print(f"Total labeled clips: {labeled_clips}, unlabeled_clips: {unlabeled_clips}")
+            #print(f"Sizes: {np.shape(np.array(X))}, {np.shape(np.array(y))}")
+            #print(f"Total labeled clips: {labeled_clips}, unlabeled_clips: {unlabeled_clips}")
             yield np.array(X), np.array(y)
 
         
@@ -67,7 +75,7 @@ def data_generator(folder, label_dict):
 def load_clip(folder):
     frames = sorted(os.listdir(folder)) 
     clip = []
-    
+ 
     for f in frames:
         path = os.path.join(folder, f)
         img =cv2.imread(path)
@@ -79,7 +87,7 @@ def load_clip(folder):
     if len(clip)==0:
         return None
     assert len(clip) == FRAMES, "Number of frames per clip not equal to #FRAMES"
-    
+ 
     return np.array(clip)
 
 
@@ -89,8 +97,7 @@ def load_labels(csv_file):
     #Remove spaces etc in colum headers
     df.columns = df.columns.str.strip()
     label_dict={}
-
-    
+ 
     for _, row in df.iterrows():
         
         #clip_id = row["ClipID"].replace(".avi", "") 
@@ -113,32 +120,62 @@ def load_labels(csv_file):
 
 
 def build_model():
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(FRAMES, IMG_SIZE, IMG_SIZE, CHANNELS)),
+        
+    inputs = tf.keras.Input(shape=(FRAMES, IMG_SIZE, IMG_SIZE, CHANNELS))
 
-        tf.keras.layers.TimeDistributed(
-            tf.keras.layers.Conv2D(16, (3,3), activation='relu')
-        ),
+    x = tf.keras.layers.TimeDistributed(
+        tf.keras.layers.Conv2D(16, (3,3), activation='relu')
+    )(inputs)
 
-        tf.keras.layers.TimeDistributed(
-            tf.keras.layers.MaxPooling2D()
-        ),
+    x = tf.keras.layers.TimeDistributed(
+        tf.keras.layers.MaxPooling2D()
+    )(x)
 
-        tf.keras.layers.TimeDistributed(
-            tf.keras.layers.Flatten()
-        ),
+    x = tf.keras.layers.TimeDistributed(
+        tf.keras.layers.Flatten()
+    )(x)
 
-        tf.keras.layers.LSTM(32),
+    x = tf.keras.layers.LSTM(32)(x)
 
-        tf.keras.layers.Dense(4)
-    ])
+    outputs = tf.keras.layers.Dense(4, activation = 'softmax')(x)
+
+    #build model
+    model = tf.keras.Model(inputs = inputs, outputs = outputs)
 
     model.compile(
         optimizer='adam',
-        loss='mse',
-        metrics=['mae']
+        loss='categorical_crossentropy',
+        metrics=['accuracy']
     )
     return model
+
+
+def plot_history(hist):
+    # Get values
+    loss = hist.history['loss']
+    accuracy = hist.history.get("accuracy")
+
+    epochs = range(1, len(loss) + 1)
+
+    plt.figure(figsize=(12, 6))
+
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs, loss, label='Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Loss vs Epoch')
+    plt.legend()
+
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs, accuracy, label='Training Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Accuracy vs Epoch')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig("Loss_accuracy.jpg", dpi=450)
+    plt.close()
 
 
 def main():
@@ -153,8 +190,9 @@ def main():
     model = build_model()
 
     print ("Start training...")
-    model.fit(gen, steps_per_epoch=1072, epochs=10)
+    history = model.fit(gen, steps_per_epoch=STEPS_PER_EPOCH, epochs=N_EPOCHS)
 
+    plot_history(history)
 
 if __name__ == "__main__":
     main()
